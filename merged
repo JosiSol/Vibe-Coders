@@ -1,0 +1,135 @@
+PYTHON := python3
+
+# Main dispatcher: detects .py or .cpp
+run:
+ @if echo "$(filter %.py,$(MAKECMDGOALS))" | grep -q .; then \
+  $(MAKE) run-py $(filter %.py,$(MAKECMDGOALS)); \
+ elif echo "$(filter %.cpp,$(MAKECMDGOALS))" | grep -q .; then \
+  $(MAKE) run-cpp $(filter %.cpp,$(MAKECMDGOALS)); \
+ else \
+  echo "Usage: make run file.py OR make run file.cpp"; \
+ fi
+
+# Python runner
+run-py:
+ @$(PYTHON) - <<'EOF' $(filter %.py,$(MAKECMDGOALS))
+import re, subprocess, sys, tempfile, os
+
+file_name = sys.argv[1]
+print(f"Checking {file_name}...\n")
+
+with open(file_name, 'r') as f:
+    code_content = f.read()
+
+input_match = re.search(r'input_data\s*=\s*"""(.*?)"""', code_content, re.DOTALL)
+expected_match = re.search(r'expected_data\s*=\s*"""(.*?)"""', code_content, re.DOTALL)
+
+if not input_match or not expected_match:
+    print("Could not extract input or expected from the file. Ensure they are defined as multi-line strings with triple quotes.")
+    sys.exit(1)
+
+input_str = input_match.group(1).strip()
+expected_str = expected_match.group(1).strip()
+
+input_lines = input_str.splitlines()
+
+with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_input:
+    temp_input.write(input_str + '\n')
+input_file = temp_input.name
+
+output_file = tempfile.mktemp()
+
+cmd = f"{sys.executable} {file_name} < {input_file} > {output_file}"
+subprocess.run(cmd, shell=True)
+
+with open(output_file, 'r') as f:
+    actual_str = f.read().strip()
+
+os.unlink(input_file)
+os.unlink(output_file)
+
+expected_lines = expected_str.splitlines()
+actual_lines = actual_str.splitlines()
+
+if actual_str == expected_str:
+    print("Accepted")
+else:
+    print("Wrong Answer")
+    for i, (exp, act) in enumerate(zip(expected_lines, actual_lines), 1):
+        if exp != act:
+            input_line = input_lines[i-1].strip() if i <= len(input_lines) else "<no input>"
+            print(f"Test case {i}: input \"{input_line}\" expected \"{exp.strip()}\" got \"{act.strip()}\"")
+    if len(actual_lines) < len(expected_lines):
+        for i in range(len(actual_lines) + 1, len(expected_lines) + 1):
+            input_line = input_lines[i-1].strip() if i <= len(input_lines) else "<no input>"
+            print(f"Test case {i}: input \"{input_line}\" expected \"{expected_lines[i-1].strip()}\" got nothing")
+    elif len(actual_lines) > len(expected_lines):
+        for i in range(len(expected_lines) + 1, len(actual_lines) + 1):
+            input_line = input_lines[i-1].strip() if i <= len(input_lines) else "<no input>"
+            print(f"Test case {i}: input \"{input_line}\" expected nothing got \"{actual_lines[i-1].strip()}\"")
+EOF
+
+# C++ runner
+run-cpp:
+ @$(PYTHON) - <<'EOF' $(filter %.cpp,$(MAKECMDGOALS))
+import re, subprocess, sys, tempfile, os
+
+cpp_file = sys.argv[1]
+print(f"Checking {cpp_file}...\n")
+
+with open(cpp_file, 'r') as f:
+    code_content = f.read()
+
+inputs_match = re.search(r'input_data\s*=\s*\[(.*?)\]', code_content, re.DOTALL)
+expected_match = re.search(r'expected_data\s*=\s*\[(.*?)\]', code_content, re.DOTALL)
+
+if not inputs_match or not expected_match:
+    print("Could not extract input_data or expected_data. Make sure they are defined as lists of triple-quoted strings in the C++ file as comments or markers.")
+    sys.exit(1)
+
+input_cases = re.findall(r'"""(.*?)"""', inputs_match.group(1), re.DOTALL)
+expected_cases = re.findall(r'"""(.*?)"""', expected_match.group(1), re.DOTALL)
+
+if len(input_cases) != len(expected_cases):
+    print("Mismatch: number of inputs and expected outputs differ.")
+    sys.exit(1)
+
+exe_file = tempfile.mktemp(suffix='.out')
+compile_cmd = ["g++", cpp_file, "-o", exe_file]
+result = subprocess.run(compile_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+if result.returncode != 0:
+    print("Compilation failed:")
+    print(result.stderr)
+    sys.exit(1)
+
+for idx, (inp, exp) in enumerate(zip(input_cases, expected_cases), 1):
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_input:
+        temp_input.write(inp.strip() + '\n')
+    input_file = temp_input.name
+
+    output_file = tempfile.mktemp()
+
+with open(input_file, 'r') as fin, open(output_file, 'w') as fout:
+        subprocess.run([exe_file], stdin=fin, stdout=fout, stderr=subprocess.PIPE, text=True)
+
+    with open(output_file, 'r') as f:
+        actual = f.read().strip()
+
+    os.unlink(input_file)
+    os.unlink(output_file)
+
+    if actual == exp.strip():
+        print(f"Test {idx}: Accepted")
+    else:
+        print(f"Test {idx}: Wrong Answer")
+        print(f"   Input:\n{inp.strip()}")
+        print(f"   Expected:\n{exp.strip()}")
+        print(f"   Got:\n{actual}")
+
+os.unlink(exe_file)
+EOF
+
+# Dummy target to allow file passing
+%:
+ @:
